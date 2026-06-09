@@ -305,8 +305,9 @@ body{font-family:var(--font-sans);background:var(--color-background-tertiary)}
 const SB_URL = 'https://wwhtbtnwxnxvjnlcxfqv.supabase.co';
 const SB_KEY = 'sb_publishable_S0kCrdN2CR7VlZGmKlnRPw_4QH1CfQE';
 
-async function sbFetch(method, table, body=null, query='') {
+async function sbFetch(method, table, body=null, query='', prefer=null) {
   try {
+    const defaultPrefer = method==='POST' ? 'return=representation' : 'return=minimal';
     const res = await fetch(`${SB_URL}/rest/v1/${table}${query}`, {
       method,
       headers: {
@@ -314,17 +315,16 @@ async function sbFetch(method, table, body=null, query='') {
         'Authorization': `Bearer ${SB_KEY}`,
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'Prefer': method==='POST' ? 'return=representation' : 'return=minimal'
+        'Prefer': prefer || defaultPrefer
       },
       body: body ? JSON.stringify(body) : null
     });
-    if(res.status === 204) return null;
-    if(res.status === 200 || res.status === 201) {
-      const text = await res.text();
-      return text ? JSON.parse(text) : null;
-    }
-    const errText = await res.text();
-    console.error('SB error', res.status, errText);
+    if(res.status === 204) return [];
+    const text = await res.text();
+    if(!text) return [];
+    const data = JSON.parse(text);
+    if(res.ok) return data;
+    console.error('SB error', res.status, data);
     return null;
   } catch(e) {
     console.error('SB fetch exception:', e);
@@ -340,15 +340,15 @@ async function loadFromDB() {
     sbFetch('GET','injuries','','?select=*&order=created_at.asc')
   ]);
 
-  if(profiles) profiles.forEach(p => {
+  if(Array.isArray(profiles)) profiles.forEach(p => {
     if(state.profiles[p.id]) {
-      state.profiles[p.id].poids = p.poids || state.profiles[p.id].poids;
-      state.profiles[p.id].cat   = p.cat   || state.profiles[p.id].cat;
-      state.profiles[p.id].obj   = p.obj   || state.profiles[p.id].obj;
+      if(p.poids) state.profiles[p.id].poids = p.poids;
+      if(p.cat)   state.profiles[p.id].cat   = p.cat;
+      if(p.obj !== null && p.obj !== undefined) state.profiles[p.id].obj = p.obj;
     }
   });
 
-  if(sessions) {
+  if(Array.isArray(sessions)) {
     state.sessions.w1 = [];
     state.sessions.w2 = [];
     sessions.forEach(s => {
@@ -360,7 +360,7 @@ async function loadFromDB() {
     });
   }
 
-  if(injuries) {
+  if(Array.isArray(injuries)) {
     state.profiles.w1.injuries = [];
     state.profiles.w2.injuries = [];
     injuries.forEach(i => {
@@ -621,7 +621,7 @@ async function confirmDuplicate(wid,id){
   const date=document.getElementById('dup-date').value||s.date;
   closeModal();
   const result = await sbFetch('POST','sessions',{wrestler_id:other,date,title:s.title,content:s.content});
-  const newId = result?.[0]?.id || nid++;
+  const newId = (Array.isArray(result) && result[0]) ? result[0].id : nid++;
   state.sessions[other].push({id:newId,date,title:s.title,content:s.content});
   showToast(`✓ Séance dupliquée vers ${W[other].name.split(' ')[0]}`);
 }
@@ -699,7 +699,12 @@ function autosave(wid){
   if(pe)p.poids=pe.value;if(ce)p.cat=ce.value;if(oe)p.obj=oe.value;
   clearTimeout(window._saveTimer);
   window._saveTimer = setTimeout(() => {
-    sbFetch('PATCH','profiles',{poids:p.poids,cat:p.cat,obj:p.obj,updated_at:new Date().toISOString()},`?id=eq.${wid}`);
+    // UPSERT : crée ou met à jour selon que la ligne existe
+    sbFetch('POST','profiles',
+      {id:wid, poids:p.poids, cat:p.cat, obj:p.obj, updated_at:new Date().toISOString()},
+      '',
+      'resolution=merge-duplicates,return=minimal'
+    );
   }, 800);
 }
 
@@ -826,7 +831,7 @@ async function saveSession(wid,isCoach){
   if(!title)return;
   closeModal();
   const result = await sbFetch('POST','sessions',{wrestler_id:wid,date,title,content});
-  const newId = result?.[0]?.id || nid++;
+  const newId = (Array.isArray(result) && result[0]) ? result[0].id : nid++;
   state.sessions[wid].push({id:newId,date,title,content});
   if(isCoach)renderCalView(wid,'coach-cal-wrap',true);
   else renderCalView(wid,'w-cal',false);
@@ -855,7 +860,7 @@ async function saveInjury(wid){
   if(!name)return;
   closeModal();
   const result = await sbFetch('POST','injuries',{wrestler_id:wid,name,date_start:date,date_end:null,status:'active'});
-  const newId = result?.[0]?.id || nid++;
+  const newId = (Array.isArray(result) && result[0]) ? result[0].id : nid++;
   state.profiles[wid].injuries.push({id:newId,name,dateStart:date,dateEnd:null,status:'active'});
   renderProfile(wid,profileCont());
 }
