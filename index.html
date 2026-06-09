@@ -575,13 +575,13 @@ function renderSessionDetail(wid,s,container,isCoach){
 function backCoach(wid){state.sessionDetail=null;renderCoach(wid);}
 function backWrestler(wid){state.sessionDetail=null;renderCalView(wid,'w-cal',false);}
 
-function saveSessionEdit(wid,id,isCoach){
+async function saveSessionEdit(wid,id,isCoach){
   const s=state.sessions[wid].find(x=>x.id===id);
   if(!s)return;
   s.title=document.getElementById('sd-title').value.trim()||s.title;
   s.content=document.getElementById('sd-content').value.trim();
   state.sessionDetail=s;
-  sbFetch('PATCH','sessions',{title:s.title,content:s.content},`?id=eq.${id}`);
+  await sbFetch('PATCH','sessions',{title:s.title,content:s.content},`?id=eq.${id}`);
   if(isCoach)renderCoach(wid);else renderCalView(wid,'w-cal',false);
 }
 
@@ -620,9 +620,17 @@ async function confirmDuplicate(wid,id){
   const other=otherWid(wid);
   const date=document.getElementById('dup-date').value||s.date;
   closeModal();
-  const result = await sbFetch('POST','sessions',{wrestler_id:other,date,title:s.title,content:s.content});
-  const newId = (Array.isArray(result) && result[0]) ? result[0].id : nid++;
-  state.sessions[other].push({id:newId,date,title:s.title,content:s.content});
+  await sbFetch('POST','sessions',{wrestler_id:other,date,title:s.title,content:s.content});
+  const sessions = await sbFetch('GET','sessions','','?select=*&order=date.asc');
+  if(Array.isArray(sessions)){
+    state.sessions.w1 = [];
+    state.sessions.w2 = [];
+    sessions.forEach(s2 => {
+      if(state.sessions[s2.wrestler_id]){
+        state.sessions[s2.wrestler_id].push({id:s2.id,date:s2.date,title:s2.title,content:s2.content});
+      }
+    });
+  }
   showToast(`✓ Séance dupliquée vers ${W[other].name.split(' ')[0]}`);
 }
 
@@ -830,9 +838,19 @@ async function saveSession(wid,isCoach){
   const content=document.getElementById('m-content').value.trim();
   if(!title)return;
   closeModal();
-  const result = await sbFetch('POST','sessions',{wrestler_id:wid,date,title,content});
-  const newId = (Array.isArray(result) && result[0]) ? result[0].id : nid++;
-  state.sessions[wid].push({id:newId,date,title,content});
+  // Insérer dans Supabase
+  await sbFetch('POST','sessions',{wrestler_id:wid,date,title,content});
+  // Recharger toutes les sessions depuis Supabase pour avoir les vrais ids
+  const sessions = await sbFetch('GET','sessions','','?select=*&order=date.asc');
+  if(Array.isArray(sessions)){
+    state.sessions.w1 = [];
+    state.sessions.w2 = [];
+    sessions.forEach(s => {
+      if(state.sessions[s.wrestler_id]){
+        state.sessions[s.wrestler_id].push({id:s.id,date:s.date,title:s.title,content:s.content});
+      }
+    });
+  }
   if(isCoach)renderCalView(wid,'coach-cal-wrap',true);
   else renderCalView(wid,'w-cal',false);
 }
@@ -859,9 +877,22 @@ async function saveInjury(wid){
   const date=document.getElementById('m-inj-date').value;
   if(!name)return;
   closeModal();
-  const result = await sbFetch('POST','injuries',{wrestler_id:wid,name,date_start:date,date_end:null,status:'active'});
-  const newId = (Array.isArray(result) && result[0]) ? result[0].id : nid++;
-  state.profiles[wid].injuries.push({id:newId,name,dateStart:date,dateEnd:null,status:'active'});
+  await sbFetch('POST','injuries',{wrestler_id:wid,name,date_start:date,date_end:null,status:'active'});
+  // Recharger les blessures depuis Supabase
+  const injuries = await sbFetch('GET','injuries','','?select=*&order=created_at.asc');
+  if(Array.isArray(injuries)){
+    state.profiles.w1.injuries = [];
+    state.profiles.w2.injuries = [];
+    injuries.forEach(i => {
+      if(state.profiles[i.wrestler_id]){
+        state.profiles[i.wrestler_id].injuries.push({
+          id:i.id, name:i.name,
+          dateStart:i.date_start, dateEnd:i.date_end,
+          status:i.status
+        });
+      }
+    });
+  }
   renderProfile(wid,profileCont());
 }
 </script>
