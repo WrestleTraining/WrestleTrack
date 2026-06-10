@@ -376,11 +376,15 @@ async function loadFromDB() {
 }
 
 // Realtime via polling léger toutes les 10s
+// Bloquer le polling pendant N ms après une écriture
+function pausePoll(ms=6000){ window._pollPaused = true; setTimeout(()=>{ window._pollPaused=false; }, ms); }
+
 function startPolling() {
   if(window._pollInterval) clearInterval(window._pollInterval);
+  window._pollPaused = false;
   window._pollInterval = setInterval(async () => {
     const user = state.user;
-    if(!user) return;
+    if(!user || window._pollPaused) return;
     await loadFromDB();
     try {
       if(user === 'coach') renderCoach(state.coachWid);
@@ -391,7 +395,7 @@ function startPolling() {
         if(calEl  && calEl.style.display  !== 'none') renderCalView(user,'w-cal',false);
       }
     } catch(e){ console.warn('Poll render error:', e); }
-  }, 10000);
+  }, 15000);
 }
 
 // ── Date réelle ──
@@ -581,6 +585,7 @@ async function saveSessionEdit(wid,id,isCoach){
   s.title=document.getElementById('sd-title').value.trim()||s.title;
   s.content=document.getElementById('sd-content').value.trim();
   state.sessionDetail=s;
+  pausePoll();
   await sbFetch('PATCH','sessions',{title:s.title,content:s.content},`?id=eq.${id}`);
   if(isCoach)renderCoach(wid);else renderCalView(wid,'w-cal',false);
 }
@@ -588,6 +593,7 @@ async function saveSessionEdit(wid,id,isCoach){
 function deleteSessionFull(wid,id,isCoach){
   state.sessions[wid]=state.sessions[wid].filter(s=>s.id!==id);
   state.sessionDetail=null;
+  pausePoll();
   sbFetch('DELETE','sessions','',`?id=eq.${id}`);
   if(isCoach)renderCoach(wid);else renderCalView(wid,'w-cal',false);
 }
@@ -620,6 +626,7 @@ async function confirmDuplicate(wid,id){
   const other=otherWid(wid);
   const date=document.getElementById('dup-date').value||s.date;
   closeModal();
+  pausePoll();
   await sbFetch('POST','sessions',{wrestler_id:other,date,title:s.title,content:s.content});
   const sessions = await sbFetch('GET','sessions','','?select=*&order=date.asc');
   if(Array.isArray(sessions)){
@@ -688,7 +695,7 @@ function renderProfile(wid,containerId){
         <textarea id="f-obj-${wid}" rows="2" oninput="autosave('${wid}')">${p.obj}</textarea>
       </div>
     </div>
-    <div class="autosave-note">✓ Sauvegarde automatique</div>
+    <div class="save-btn-wrap"><button id="save-profile-${wid}" onclick="saveProfile('${wid}')" style="background:#1e2d56;border:0.5px solid #c9a84c;border-radius:var(--border-radius-md);padding:7px 18px;font-size:13px;color:#c9a84c;cursor:pointer;font-family:var(--font-sans)">💾 Enregistrer le profil</button></div>
     <div style="margin-top:.75rem;border-top:0.5px solid var(--color-border-tertiary);padding-top:.75rem">
       <div style="font-size:12px;font-weight:500;color:var(--color-text-secondary);margin-bottom:.5rem;display:flex;align-items:center;gap:5px">
         🩹 Blessures
@@ -700,31 +707,41 @@ function renderProfile(wid,containerId){
 }
 
 function autosave(wid){
+  // Juste mettre à jour le state local, pas d'envoi Supabase
   const p=state.profiles[wid];
   const pe=document.getElementById('f-poids-'+wid);
   const ce=document.getElementById('f-cat-'+wid);
   const oe=document.getElementById('f-obj-'+wid);
   if(pe)p.poids=pe.value;if(ce)p.cat=ce.value;if(oe)p.obj=oe.value;
-  clearTimeout(window._saveTimer);
-  window._saveTimer = setTimeout(() => {
-    // UPSERT : crée ou met à jour selon que la ligne existe
-    sbFetch('POST','profiles',
-      {id:wid, poids:p.poids, cat:p.cat, obj:p.obj, updated_at:new Date().toISOString()},
-      '',
-      'resolution=merge-duplicates,return=minimal'
-    );
-  }, 800);
+  // Afficher le bouton comme "modifié"
+  const btn=document.getElementById('save-profile-'+wid);
+  if(btn){ btn.style.background='#c9a84c'; btn.textContent='💾 Enregistrer'; }
+}
+
+async function saveProfile(wid){
+  const p=state.profiles[wid];
+  const btn=document.getElementById('save-profile-'+wid);
+  if(btn){ btn.textContent='...'; btn.disabled=true; }
+  await sbFetch('POST','profiles',
+    {id:wid, poids:p.poids, cat:p.cat, obj:p.obj, updated_at:new Date().toISOString()},
+    '',
+    'resolution=merge-duplicates,return=minimal'
+  );
+  if(btn){ btn.textContent='✓ Enregistré'; btn.style.background='#3B6D11'; btn.disabled=false; }
+  setTimeout(()=>{ if(btn){ btn.textContent='💾 Enregistrer'; btn.style.background='#1e2d56'; } },2000);
 }
 
 function healInjury(wid,id){
   const inj=state.profiles[wid].injuries.find(i=>i.id===id);
   if(inj){inj.status='healed';inj.dateEnd=todayStr();}
+  pausePoll();
   sbFetch('PATCH','injuries',{status:'healed',date_end:todayStr()},`?id=eq.${id}`);
   renderProfile(wid,profileCont());
 }
 
 function deleteInjury(wid,id){
   state.profiles[wid].injuries=state.profiles[wid].injuries.filter(i=>i.id!==id);
+  pausePoll();
   sbFetch('DELETE','injuries','',`?id=eq.${id}`);
   renderProfile(wid,profileCont());
 }
@@ -808,6 +825,7 @@ function openDetail(wid,id,isCoach){
 
 function quickDelete(wid,id,isCoach){
   state.sessions[wid]=state.sessions[wid].filter(s=>s.id!==id);
+  pausePoll();
   sbFetch('DELETE','sessions','',`?id=eq.${id}`);
   if(isCoach)renderCalView(wid,'coach-cal-wrap',true);
   else renderCalView(wid,'w-cal',false);
@@ -838,6 +856,7 @@ async function saveSession(wid,isCoach){
   const content=document.getElementById('m-content').value.trim();
   if(!title)return;
   closeModal();
+  pausePoll();
   // Insérer dans Supabase
   await sbFetch('POST','sessions',{wrestler_id:wid,date,title,content});
   // Recharger toutes les sessions depuis Supabase pour avoir les vrais ids
@@ -877,6 +896,7 @@ async function saveInjury(wid){
   const date=document.getElementById('m-inj-date').value;
   if(!name)return;
   closeModal();
+  pausePoll();
   await sbFetch('POST','injuries',{wrestler_id:wid,name,date_start:date,date_end:null,status:'active'});
   // Recharger les blessures depuis Supabase
   const injuries = await sbFetch('GET','injuries','','?select=*&order=created_at.asc');
